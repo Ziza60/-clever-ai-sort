@@ -8,13 +8,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
-import { Loader2, Upload, Download, FileJson, Save } from "lucide-react";
+import { Loader2, Upload, Download, FileJson, Save, AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { getSupabase } from "@/integrations/supabase/client";
+import { validateClassification, calculateMetrics } from "@/lib/validation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface ClassificationResult {
   categories: string[];
   tags: string[];
   description?: string;
+  confidence?: number;
+  reasoning?: string;
+  debug_warnings?: string[];
+  debug_firewall_aplicado?: boolean;
+  debug_host?: string;
 }
 
 const STORAGE_KEY = 'classifier_batch_results';
@@ -165,6 +172,7 @@ export const ToolClassifier = () => {
   const [provider, setProvider] = useState<"claude" | "openai">("openai");
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<ClassificationResult | null>(null);
+  const [validationResult, setValidationResult] = useState<any>(null);
   const [delayBetweenRequests, setDelayBetweenRequests] = useState(2000); // 2 segundos entre requisições
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [batchResults, setBatchResults] = useState<Array<{url: string; result?: ClassificationResult; error?: string}>>([]);
@@ -233,7 +241,7 @@ export const ToolClassifier = () => {
             if (data.error?.includes("429")) {
               retries++;
               if (retries < maxRetries) {
-                const waitTime = delayBetweenRequests * retries * 2; // Backoff exponencial
+                const waitTime = delayBetweenRequests * retries * 2;
                 console.log(`Rate limit atingido para ${currentUrl}. Aguardando ${waitTime}ms antes de tentar novamente (tentativa ${retries}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 continue;
@@ -242,7 +250,17 @@ export const ToolClassifier = () => {
             throw new Error(data.error || "Erro ao classificar");
           }
 
-          results.push({ url: currentUrl, result: data });
+          const validation = validateClassification(data, currentUrl, description.trim());
+          const enrichedResult = { ...data, ...validation.corrections };
+
+          results.push({
+            url: currentUrl,
+            result: enrichedResult,
+            validation: {
+              warnings: validation.warnings,
+              confidence: validation.confidence
+            }
+          });
           success = true;
         } catch (error) {
           console.error(`Erro ao processar ${currentUrl}:`, error);
@@ -275,6 +293,9 @@ export const ToolClassifier = () => {
     
     if (urls.length === 1 && results[0].result) {
       setResult(results[0].result);
+      if (results[0].validation) {
+        setValidationResult(results[0].validation);
+      }
       toast.success("Ferramenta classificada com sucesso!");
     } else {
       toast.success(`Processamento concluído! ${successCount} sucesso, ${errorCount} erros`);
@@ -762,14 +783,53 @@ export const ToolClassifier = () => {
       </Card>
 
       {result && !isLoading && batchResults.length === 0 && (
-        <Card>
+        <Card className="border-l-4 border-l-blue-500">
           <CardHeader>
-            <CardTitle>Resultado da Classificação</CardTitle>
-            <CardDescription>
-              Categorias e tags identificadas pela IA
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Resultado da Classificação</CardTitle>
+                <CardDescription>
+                  Categorias e tags identificadas pela IA
+                </CardDescription>
+              </div>
+              {result.confidence && (
+                <Badge variant={result.confidence > 0.8 ? "default" : "secondary"}>
+                  Confiança: {(result.confidence * 100).toFixed(0)}%
+                </Badge>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            {validationResult && validationResult.warnings && validationResult.warnings.length > 0 && (
+              <Alert variant={validationResult.warnings.some((w: string) => w.startsWith('❌')) ? "destructive" : "default"}>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Avisos de Validação</AlertTitle>
+                <AlertDescription>
+                  <ul className="list-disc list-inside space-y-1 text-sm">
+                    {validationResult.warnings.map((w: string, i: number) => (
+                      <li key={i} className="flex items-start gap-2">
+                        {w.startsWith('✅') && <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0 mt-0.5" />}
+                        {w.startsWith('⚠️') && <AlertTriangle className="h-4 w-4 text-yellow-500 flex-shrink-0 mt-0.5" />}
+                        {w.startsWith('❌') && <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />}
+                        {w.startsWith('ℹ️') && <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />}
+                        <span>{w.replace(/^(✅|⚠️|❌|ℹ️)\s*/, '')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {result.reasoning && (
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertTitle>Justificativa da Classificação</AlertTitle>
+                <AlertDescription className="text-sm">
+                  {result.reasoning}
+                </AlertDescription>
+              </Alert>
+            )}
+
             <div className="space-y-2">
               <h3 className="text-sm font-semibold">Categorias</h3>
               <div className="flex flex-wrap gap-2">
@@ -846,21 +906,62 @@ export const ToolClassifier = () => {
       )}
 
       {batchResults.length > 0 && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Resultados do Processamento em Lote</CardTitle>
-                <CardDescription>
-                  {batchResults.filter(r => r.result).length} classificações bem-sucedidas, {batchResults.filter(r => r.error).length} erros • Pipeline OpenAI → Claude
-                </CardDescription>
+        <>
+          <Card className="bg-gradient-to-r from-blue-500/10 to-green-500/10">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Info className="h-5 w-5" />
+                Estatísticas da Sessão
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Total Classificado</p>
+                  <p className="text-2xl font-bold">{batchResults.length}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Taxa de Sucesso</p>
+                  <p className="text-2xl font-bold text-green-500">
+                    {((batchResults.filter(r => r.result).length / batchResults.length) * 100).toFixed(0)}%
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Confiança Média</p>
+                  <p className="text-2xl font-bold">
+                    {(() => {
+                      const validResults = batchResults.filter(r => r.result?.confidence);
+                      if (validResults.length === 0) return 'N/A';
+                      const avg = validResults.reduce((acc, r) => acc + (r.result?.confidence || 0), 0) / validResults.length;
+                      return `${(avg * 100).toFixed(0)}%`;
+                    })()}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Com Avisos</p>
+                  <p className="text-2xl font-bold text-yellow-500">
+                    {batchResults.filter(r => r.validation?.warnings?.length > 0).length}
+                  </p>
+                </div>
               </div>
-              <Badge variant="outline" className="text-xs bg-green-500/10">
-                ✅ Validado pelo Claude
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Resultados do Processamento em Lote</CardTitle>
+                  <CardDescription>
+                    {batchResults.filter(r => r.result).length} classificações bem-sucedidas, {batchResults.filter(r => r.error).length} erros • Pipeline OpenAI → Claude
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="text-xs bg-green-500/10">
+                  ✅ Validado pelo Claude
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
             <div className="max-h-96 overflow-y-auto space-y-3">
               {batchResults.map((item, index) => (
                 <Card key={index} className={item.error ? "border-destructive/50" : "border-primary/20"}>
@@ -877,6 +978,28 @@ export const ToolClassifier = () => {
                       )}
                       {item.result && (
                         <div className="space-y-2">
+                          {item.validation?.warnings && item.validation.warnings.length > 0 && (
+                            <div className="text-xs space-y-1 mb-2">
+                              {item.validation.warnings.slice(0, 2).map((w: string, wIdx: number) => (
+                                <div key={wIdx} className="flex items-center gap-1 text-muted-foreground">
+                                  {w.startsWith('✅') && <CheckCircle2 className="h-3 w-3 text-green-500" />}
+                                  {w.startsWith('⚠️') && <AlertTriangle className="h-3 w-3 text-yellow-500" />}
+                                  {w.startsWith('❌') && <AlertTriangle className="h-3 w-3 text-red-500" />}
+                                  <span className="truncate">{w.replace(/^(✅|⚠️|❌|ℹ️)\s*/, '').substring(0, 80)}</span>
+                                </div>
+                              ))}
+                              {item.validation.warnings.length > 2 && (
+                                <span className="text-xs text-muted-foreground">+{item.validation.warnings.length - 2} mais avisos</span>
+                              )}
+                            </div>
+                          )}
+
+                          {item.result.confidence && (
+                            <Badge variant="outline" className="text-xs mb-2">
+                              {(item.result.confidence * 100).toFixed(0)}% confiança
+                            </Badge>
+                          )}
+
                           <div className="flex flex-wrap gap-1">
                             {item.result.categories.slice(0, 3).map((cat) => (
                               <Badge key={cat} variant="secondary" className="text-xs">
@@ -926,6 +1049,7 @@ export const ToolClassifier = () => {
             </div>
           </CardContent>
         </Card>
+        </>
       )}
     </div>
   );

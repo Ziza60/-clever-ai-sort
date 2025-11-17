@@ -1,8 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { SYSTEM_PROMPT_V2 } from "./system-prompt.ts";
 
-// ===== NOVA VERSÃO - FORÇAR REBUILD =====
-const VERSION = 'v6.0-FINAL-REBUILD-2025-01-16';
+const VERSION = 'v7.0-VALIDATION-SYSTEM-2025-01-17';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -10,7 +10,6 @@ const corsHeaders = {
 };
 
 const AVAILABLE_TAGS = [
-  // Texto e Redação
   "Copywriting",
   "Geração de texto",
   "Escrita criativa",
@@ -26,8 +25,6 @@ const AVAILABLE_TAGS = [
   "Ferramentas educacionais (para estudantes)",
   "Verificador gramatical/ortográfico",
   "Geração de conteúdo SEO",
-  
-  // Imagem e Design
   "Gerador de arte",
   "IA para fotos",
   "Edição automática de imagem",
@@ -43,8 +40,6 @@ const AVAILABLE_TAGS = [
   "IA para design gráfico",
   "Criação de banner/post digital",
   "Designer de interface UI/UX",
-  
-  // Vídeo e Animação
   "Editor de vídeo IA",
   "Geração de vídeo a partir de texto",
   "Texto para animação",
@@ -59,8 +54,6 @@ const AVAILABLE_TAGS = [
   "Geração de trailers",
   "História animada/manual storyboard",
   "Conversão de slides em vídeo",
-  
-  // Áudio e Voz
   "Text-to-speech",
   "Clonagem de voz",
   "Narrador automático",
@@ -75,8 +68,6 @@ const AVAILABLE_TAGS = [
   "Enhancer de áudio (limpeza ruído)",
   "Dublagem automática",
   "Mídia multilingue voz",
-  
-  // Negócios e Produtividade
   "Automação de tarefas",
   "Agendamento automático",
   "CRM inteligente",
@@ -95,8 +86,6 @@ const AVAILABLE_TAGS = [
   "CRM e segmentação",
   "Campanhas multicanal",
   "IA para marketing",
-  
-  // Chatbots e Assistentes
   "Chatbot multi-idiomas",
   "Atendimento automático",
   "Suporte ao cliente IA",
@@ -108,8 +97,6 @@ const AVAILABLE_TAGS = [
   "Avatar conversacional",
   "Assistente para reuniões",
   "IA para onboarding",
-  
-  // Tags Extras
   "Chrome Extension / Plugin",
   "API disponível",
   "Multi-idiomas",
@@ -131,14 +118,46 @@ const TAGS_PROIBIDAS = new Set<string>([
   "Produtividade"
 ]);
 
-function sanitizeClassificationResult(result: any, url?: string) {
+const FERRAMENTAS_AMPLAS_EXTENDED = [
+  "midjourney.com", "www.midjourney.com",
+  "runwayml.com", "www.runwayml.com", "runway.ml", "www.runway.ml",
+  "elevenlabs.io", "www.elevenlabs.io",
+  "copy.ai", "www.copy.ai",
+  "jasper.ai", "www.jasper.ai",
+  "descript.com", "www.descript.com",
+  "synthesia.io", "www.synthesia.io",
+  "replicate.com", "www.replicate.com",
+  "heygen.com", "www.heygen.com",
+  "loom.com", "www.loom.com",
+  "runware.ai", "www.runware.ai",
+  "figma.com", "www.figma.com",
+  "canva.com", "www.canva.com",
+  "huggingface.co", "modal.com", "runpod.io"
+];
+
+const KEYWORDS_NICHO_EXTENDED = [
+  "legal", "law", "contract", "compliance", "tribunal", "advocacia", "jurídico", "contrato",
+  "medical", "health", "hospital", "diagnosis", "patient", "clinical", "médico", "saúde", "clínica",
+  "banking", "finance", "trading", "investment", "credit", "loan", "financeiro", "banco",
+  "accounting", "tax", "fiscal", "audit", "contábil", "impostos",
+  "school", "university", "education", "learning", "educação", "escola", "universidade",
+  "engineering", "CAD", "manufacturing", "industrial", "IoT", "engenharia",
+  "architecture", "construction", "building", "arquitetura", "construção",
+  "research", "scientific", "lab", "academic", "journal", "científico", "pesquisa"
+];
+
+function detectNichoKeywords(description: string, url: string): number {
+  const textoBusca = `${description} ${url}`.toLowerCase();
+  return KEYWORDS_NICHO_EXTENDED.filter(kw => textoBusca.includes(kw.toLowerCase())).length;
+}
+
+function sanitizeClassificationResult(result: any, url?: string, description?: string) {
   console.log('🛡️ FIREWALL - Entrada:', JSON.stringify(result, null, 2));
   
   if (!result || typeof result !== "object") {
     throw new Error("Resultado de classificação inválido");
   }
 
-  // Validar categorias
   const categoriasValidas = [
     "IMAGEM E DESIGN",
     "VÍDEO E ANIMAÇÃO",
@@ -172,7 +191,6 @@ function sanitizeClassificationResult(result: any, url?: string) {
     }
   }
 
-  // Extrair host da URL
   let host = "";
   try {
     if (url) {
@@ -182,49 +200,36 @@ function sanitizeClassificationResult(result: any, url?: string) {
     host = (url || "").toLowerCase();
   }
 
-  const nuncaNichoHosts = [
-    "midjourney.com",
-    "www.midjourney.com",
-    "runwayml.com",
-    "www.runwayml.com",
-    "runway.ml",
-    "www.runway.ml",
-    "elevenlabs.io",
-    "www.elevenlabs.io",
-    "copy.ai",
-    "www.copy.ai",
-    "jasper.ai",
-    "www.jasper.ai",
-    "descript.com",
-    "www.descript.com",
-    "synthesia.io",
-    "www.synthesia.io",
-    "replicate.com",
-    "www.replicate.com",
-    "heygen.com",
-    "www.heygen.com",
-    "loom.com",
-    "www.loom.com",
-  ];
-
-  const isFerramentaAmpla = host && nuncaNichoHosts.some((h) => host.includes(h));
+  const isFerramentaAmpla = host && FERRAMENTAS_AMPLAS_EXTENDED.some((h) => host.includes(h));
 
   const categoriasOriginais = {
     principal: result.categoria_principal,
     secundaria: result.categoria_secundaria || null
   };
 
+  const warnings: string[] = [];
+
   if (isFerramentaAmpla) {
     console.log('⚠️ FIREWALL - Ferramenta ampla detectada, removendo NICHO');
     if (result.categoria_principal === "ESPECÍFICAS E NICHO") {
-      result.categoria_principal = result.categoria_secundaria || "IMAGEM E DESIGN";
+      warnings.push('Ferramenta ampla/conhecida categorizada incorretamente como NICHO');
+      result.categoria_principal = result.categoria_secundaria || "CÓDIGO E DESENVOLVIMENTO";
       result.categoria_secundaria = null;
     } else if (result.categoria_secundaria === "ESPECÍFICAS E NICHO") {
+      warnings.push('Categoria secundária NICHO removida (ferramenta ampla)');
       result.categoria_secundaria = null;
     }
   }
 
-  // Sanitizar tags
+  if (result.categoria_principal === "ESPECÍFICAS E NICHO" && description) {
+    const nichoKeywordCount = detectNichoKeywords(description, url || '');
+    if (nichoKeywordCount < 2) {
+      warnings.push(`Categoria NICHO sem evidência suficiente (${nichoKeywordCount} palavra-chave encontrada)`);
+      result.categoria_principal = result.categoria_secundaria || "NEGÓCIOS E PRODUTIVIDADE";
+      result.categoria_secundaria = null;
+    }
+  }
+
   let tagsOriginais: string[] = [];
 
   if (Array.isArray(result.tags_funcionais)) {
@@ -267,6 +272,8 @@ function sanitizeClassificationResult(result: any, url?: string) {
   result.debug_firewall_aplicado = true;
   result.debug_host = host;
   result.debug_categoria_original = categoriasOriginais;
+  result.debug_warnings = warnings;
+  result.confianca = result.confianca || (warnings.length > 0 ? 0.7 : 0.85);
 
   console.log('🛡️ FIREWALL - Saída:', JSON.stringify(result, null, 2));
 
@@ -292,13 +299,16 @@ function convertToFrontendFormat(result: any): any {
     categories,
     tags,
     description: result.descricao || result.description || "",
+    confidence: result.confianca || 0.8,
+    reasoning: result.reasoning || '',
     debug_firewall_aplicado: result.debug_firewall_aplicado,
     debug_host: result.debug_host,
     debug_categoria_original: result.debug_categoria_original,
+    debug_warnings: result.debug_warnings || [],
   };
 }
 
-const SYSTEM_PROMPT = `Você é um CLASSIFICADOR AUTOMÁTICO de ferramentas de IA para um diretório grande (1500+ ferramentas).
+const SYSTEM_PROMPT_LEGACY = `Você é um CLASSIFICADOR AUTOMÁTICO de ferramentas de IA para um diretório grande (1500+ ferramentas).
 
 CATEGORIAS OFICIAIS (lista fechada - use no máximo 2):
 - IMAGEM E DESIGN
@@ -371,8 +381,12 @@ FORMATO DE RESPOSTA OBRIGATÓRIO:
   "categoria_secundaria": "CATEGORIA ou null",
   "tags_funcionais": ["tag1", "tag2", "tag3"],
   "tags_caso_uso": [],
-  "descricao": "Breve descrição da ferramenta"
+  "descricao": "Breve descrição da ferramenta",
+  "confianca": 0.85,
+  "reasoning": "Breve justificativa das escolhas"
 }`;
+
+const SYSTEM_PROMPT = SYSTEM_PROMPT_V2.replace('[Lista completa de tags disponíveis será fornecida]', AVAILABLE_TAGS.join(', '));
 
 serve(async (req) => {
   console.log('🔥🔥🔥 CLEVER-SERVICE', VERSION, '- INICIADO 🔥🔥🔥');
@@ -435,8 +449,8 @@ serve(async (req) => {
       }
       const parsed = JSON.parse(jsonMatch[0]);
       console.log('🔍 PARSED (ANTES FIREWALL):', JSON.stringify(parsed, null, 2));
-      
-      const sanitized = sanitizeClassificationResult(parsed, url);
+
+      const sanitized = sanitizeClassificationResult(parsed, url, description);
       
       result = convertToFrontendFormat(sanitized);
       console.log('📤 RESULT FINAL:', JSON.stringify(result, null, 2));
@@ -475,7 +489,7 @@ serve(async (req) => {
         throw new Error('Resposta não contém JSON válido');
       }
       const parsed = JSON.parse(jsonMatch[0]);
-      const sanitized = sanitizeClassificationResult(parsed, url);
+      const sanitized = sanitizeClassificationResult(parsed, url, description);
       result = convertToFrontendFormat(sanitized);
     }
 
