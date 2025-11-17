@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { SYSTEM_PROMPT_V2 } from "./system-prompt.ts";
 
-const VERSION = 'v7.1-STRICT-FIREWALL-2025-01-17';
+const VERSION = 'v7.2-FIREWALL-FIX-1763352350';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -354,6 +354,7 @@ function convertToFrontendFormat(result: any): any {
     debug_host: result.debug_host,
     debug_categoria_original: result.debug_categoria_original,
     debug_warnings: result.debug_warnings || [],
+    version: VERSION,
   };
 }
 
