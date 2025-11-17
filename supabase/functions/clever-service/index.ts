@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { SYSTEM_PROMPT_V2 } from "./system-prompt.ts";
 
-const VERSION = 'v7.0-VALIDATION-SYSTEM-2025-01-17';
+const VERSION = 'v7.1-STRICT-FIREWALL-2025-01-17';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -115,7 +115,24 @@ const TAGS_PROIBIDAS = new Set<string>([
   "Marketing e publicidade",
   "Interface no-code",
   "Inspiração",
-  "Produtividade"
+  "Produtividade",
+  "Geração de imagens",
+  "Edição de imagens",
+  "Geração de áudio",
+  "Síntese de voz",
+  "Geração de vídeo",
+  "Edição de vídeo",
+  "Transcrição de áudio",
+  "Geração de código",
+  "Geração de texto",
+  "Processamento de linguagem natural",
+  "Desenvolvimento de software",
+  "Automação de workflows",
+  "Gerenciamento de tarefas",
+  "Suporte multiplataforma",
+  "Integração com outras ferramentas",
+  "Assistente pessoal",
+  "Escritor AI"
 ]);
 
 const FERRAMENTAS_AMPLAS_EXTENDED = [
@@ -236,28 +253,60 @@ function sanitizeClassificationResult(result: any, url?: string, description?: s
     tagsOriginais = result.tags_funcionais;
   } else if (Array.isArray(result.tags)) {
     tagsOriginais = result.tags;
+  } else {
+    tagsOriginais = [];
   }
 
   console.log('📋 FIREWALL - Tags originais do modelo:', tagsOriginais);
   console.log('✅ FIREWALL - Whitelist tem', TAG_WHITELIST.size, 'tags permitidas');
   console.log('❌ FIREWALL - Tags proibidas:', Array.from(TAGS_PROIBIDAS));
 
-  let tagsFiltradas = tagsOriginais.filter((tag) => {
-    const isString = typeof tag === "string";
-    const inWhitelist = TAG_WHITELIST.has(tag);
-    const isProibida = TAGS_PROIBIDAS.has(tag);
-    
-    console.log(`  🔍 Tag "${tag}": string=${isString}, whitelist=${inWhitelist}, proibida=${isProibida}`);
-    
-    return isString && inWhitelist && !isProibida;
-  });
-  
+  let tagsFiltradas: string[] = [];
+  let tagsRemovidasProibidas: string[] = [];
+  let tagsRemovidasInvalidas: string[] = [];
+
+  for (const tag of tagsOriginais) {
+    if (typeof tag !== "string") {
+      console.log(`  ❌ Removida (não é string): ${tag}`);
+      continue;
+    }
+
+    if (TAGS_PROIBIDAS.has(tag)) {
+      console.log(`  ❌ Removida (proibida): "${tag}"`);
+      tagsRemovidasProibidas.push(tag);
+      continue;
+    }
+
+    if (!TAG_WHITELIST.has(tag)) {
+      console.log(`  ❌ Removida (não está na whitelist): "${tag}"`);
+      tagsRemovidasInvalidas.push(tag);
+      continue;
+    }
+
+    console.log(`  ✅ Aprovada: "${tag}"`);
+    tagsFiltradas.push(tag);
+  }
+
+  if (tagsRemovidasProibidas.length > 0) {
+    warnings.push(`Tags proibidas removidas: ${tagsRemovidasProibidas.join(', ')}`);
+  }
+
+  if (tagsRemovidasInvalidas.length > 0) {
+    warnings.push(`Tags inválidas (não estão na whitelist): ${tagsRemovidasInvalidas.join(', ')}`);
+  }
+
   console.log('✨ FIREWALL - Tags após filtragem:', tagsFiltradas);
 
   tagsFiltradas = Array.from(new Set(tagsFiltradas));
 
+  const originalLength = tagsFiltradas.length;
   if (tagsFiltradas.length > 5) {
+    warnings.push(`Limite de 5 tags excedido (${tagsFiltradas.length} tags). Mantendo apenas as 5 primeiras.`);
     tagsFiltradas = tagsFiltradas.slice(0, 5);
+  }
+
+  if (tagsFiltradas.length === 0) {
+    warnings.push('ERRO CRÍTICO: Nenhuma tag válida após filtragem');
   }
 
   result.tags_funcionais = tagsFiltradas;
@@ -308,89 +357,11 @@ function convertToFrontendFormat(result: any): any {
   };
 }
 
-const SYSTEM_PROMPT_LEGACY = `Você é um CLASSIFICADOR AUTOMÁTICO de ferramentas de IA para um diretório grande (1500+ ferramentas).
-
-CATEGORIAS OFICIAIS (lista fechada - use no máximo 2):
-- IMAGEM E DESIGN
-- VÍDEO E ANIMAÇÃO
-- ÁUDIO E VOZ
-- TEXTO E REDAÇÃO
-- CHATBOTS E ASSISTENTES
-- CÓDIGO E DESENVOLVIMENTO
-- NEGÓCIOS E PRODUTIVIDADE
-- EDUCAÇÃO E TREINAMENTO
-- SEGURANÇA E PRIVACIDADE
-- DADOS E ANALYTICS
-- PESQUISA E CIÊNCIA
-- ESPECÍFICAS E NICHO
-
-REGRA DE NICHO (OBRIGATÓRIA E PRIORITÁRIA):
-
-A categoria "ESPECÍFICAS E NICHO" só pode ser usada se e somente se a descrição contiver palavras-chave claras relacionadas a setores específicos, como:
-
-- jurídico, contrato, advocacia, tribunal, compliance legal  
-- médico, hospital, clínica, saúde, diagnóstico, radiologia  
-- contábil, fiscal, impostos, balanço, auditoria  
-- financeiro, crédito, empréstimo, banco, trading, investimento  
-- educação formal (escolas, universidades, provas oficiais)  
-- engenharia, IoT industrial, CAD, manufatura, robótica  
-- arquitetura, construção civil, imobiliário  
-- pesquisa científica, artigo acadêmico, laboratório  
-
-Se nenhuma dessas palavras aparecer **explicitamente** na descrição, é PROIBIDO usar "ESPECÍFICAS E NICHO".
-
-Ferramentas amplas ou genéricas como:
-Midjourney, Runway, ElevenLabs, Replicate, Copy.ai, Jasper, HeyGen, Loom
-NUNCA devem usar "ESPECÍFICAS E NICHO".
-
-TAGS FUNCIONAIS PERMITIDAS (whitelist - NÃO inventar novas):
-${AVAILABLE_TAGS.join(', ')}
-
-IMPORTANTE:
-Você só pode usar tags FUNCIONAIS que existam na whitelist acima.
-Qualquer tag que NÃO estiver na lista deve ser automaticamente descartada.
-NÃO crie variações, NÃO ajuste texto, NÃO traduza e NÃO invente tags.
-
-LIMITE DURO:
-Selecione no máximo 5 tags funcionais. Se o modelo listar mais de 5, você deve retornar apenas as 5 mais relevantes para a descrição.
-
-TAGS PROIBIDAS (NUNCA use estas tags):
-- "Design e criatividade"
-- "Criação de conteúdo"
-- "Criação de marketing"
-- "Marketing e publicidade"
-- "Interface no-code"
-- "Inspiração"
-- "Produtividade"
-
-Se essas tags forem sugeridas pela classificação preliminar, REMOVA TODAS elas.
-
-REGRAS OBRIGATÓRIAS:
-1. Use NO MÁXIMO 2 categorias: categoria_principal (obrigatória) e categoria_secundaria (opcional)
-2. Selecione NO MÁXIMO 5 tags funcionais da whitelist
-3. Use APENAS tags da lista fornecida - NÃO invente tags novas
-4. NÃO altere o texto das tags (mantenha grafia exata)
-5. Evite usar "NEGÓCIOS E PRODUTIVIDADE" como secundária genérica
-6. Use "ESPECÍFICAS E NICHO" SOMENTE quando houver evidência clara de setor específico (veja regra de nicho acima)
-7. Se categoria_principal = "ESPECÍFICAS E NICHO", NÃO defina categoria_secundaria
-8. Retorne APENAS JSON válido, sem texto adicional
-
-FORMATO DE RESPOSTA OBRIGATÓRIO:
-{
-  "categoria_principal": "CATEGORIA",
-  "categoria_secundaria": "CATEGORIA ou null",
-  "tags_funcionais": ["tag1", "tag2", "tag3"],
-  "tags_caso_uso": [],
-  "descricao": "Breve descrição da ferramenta",
-  "confianca": 0.85,
-  "reasoning": "Breve justificativa das escolhas"
-}`;
-
 const SYSTEM_PROMPT = SYSTEM_PROMPT_V2.replace('[Lista completa de tags disponíveis será fornecida]', AVAILABLE_TAGS.join(', '));
 
 serve(async (req) => {
   console.log('🔥🔥🔥 CLEVER-SERVICE', VERSION, '- INICIADO 🔥🔥🔥');
-  console.log('⚠️ NOVO CÓDIGO ATIVO - FIREWALL COMPLETO OPERACIONAL');
+  console.log('⚠️ FIREWALL RIGOROSO ATIVO - TAGS PROIBIDAS SERÃO REMOVIDAS');
   
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
